@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Jul 30 10:57:27 2024
+
+@author: fvera
+
+Relating cross-correlated spike-train functions (CCFs) with convolutional neural networks (CNNs) involves leveraging the CCFs as a feature set to train CNNs for various tasks such as classification, prediction, or analysis of neuronal dynamics.
+
+"""
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from scipy.signal import correlate
+import matplotlib.pyplot as plt
+
+# Generate synthetic spike train data (binary arrays)
+np.random.seed(0)
+spike_train_1 = np.random.randint(0, 2, 2000)  # Random binary spike train for neuron 1
+spike_train_2 = np.random.randint(0, 2, 2000)  # Random binary spike train for neuron 2
+
+# Compute Cross-Correlation Functions (CCFs)
+def compute_ccf(data1, data2, max_lag=100):
+    # Calculate the cross-correlation of two spike trains
+    ccf = correlate(data1, data2, mode='full', method='auto')
+    # Define the range of lags to consider
+    lags = np.arange(-max_lag, max_lag + 1)
+    # Center the CCF around zero lag
+    ccf_center = len(ccf) // 2
+    ccf = ccf[ccf_center - max_lag:ccf_center + max_lag + 1]
+    return lags, ccf
+
+lags, ccf = compute_ccf(spike_train_1, spike_train_2)
+
+# Reshape CCFs for CNN input
+ccf_reshaped = ccf.reshape(1, 1, -1)  # Assuming 1D input with one channel
+
+# Define CNN architecture
+class CNN(nn.Module):
+    def __init__(self):
+        super(CNN, self).__init__()
+        # First convolutional layer
+        self.conv1 = nn.Conv1d(in_channels=1, out_channels=16, kernel_size=3, stride=1, padding=1)
+        # Pooling layer
+        self.pool = nn.MaxPool1d(kernel_size=2, stride=2, padding=0)
+        # Second convolutional layer
+        self.conv2 = nn.Conv1d(in_channels=16, out_channels=32, kernel_size=3, stride=1, padding=1)
+        # Fully connected layer
+        self.fc1 = nn.Linear(32 * (len(ccf) // 2 // 2), 50)  # Adjust the size according to your data
+        # Output layer
+        self.fc2 = nn.Linear(50, 2)  # Example for binary classification
+
+    def forward(self, x):
+        # Pass through first conv layer, apply ReLU activation and pooling
+        x = self.pool(torch.relu(self.conv1(x)))
+        # Pass through second conv layer, apply ReLU activation and pooling
+        x = self.pool(torch.relu(self.conv2(x)))
+        # Flatten the output for the fully connected layer
+        x = x.view(-1, 32 * (len(ccf) // 2 // 2))
+        # Pass through fully connected layers with ReLU activation
+        x = torch.relu(self.fc1(x))
+        # Output layer
+        x = self.fc2(x)
+        return x
+
+# Prepare data for training
+ccf_tensor = torch.tensor(ccf_reshaped, dtype=torch.float32)
+labels = torch.tensor([1], dtype=torch.long)  # Example label
+
+# Instantiate and train the CNN
+model = CNN()
+criterion = nn.CrossEntropyLoss()  # Loss function
+optimizer = optim.Adam(model.parameters(), lr=0.001)  # Optimizer
+
+# Training loop
+for epoch in range(2000):
+    optimizer.zero_grad()  # Clear previous gradients
+    outputs = model(ccf_tensor)  # Forward pass
+    loss = criterion(outputs, labels)  # Compute loss
+    loss.backward()  # Backward pass
+    optimizer.step()  # Update weights
+
+# Validate the model (using same data for simplicity)
+with torch.no_grad():
+    outputs = model(ccf_tensor)  # Forward pass
+    _, predicted = torch.max(outputs, 1)  # Get the predicted labels
+    accuracy = (predicted == labels).sum().item() / len(labels)  # Calculate accuracy
+
+print(f'Validation Accuracy: {accuracy}')
+
+# Plot CCF for visualization
+plt.figure(figsize=(10, 6))
+plt.plot(lags, ccf)
+plt.title('Cross-Correlation Function')
+plt.xlabel('Lag')
+plt.ylabel('CCF')
+plt.grid(True)
+plt.show()
