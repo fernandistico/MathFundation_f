@@ -1,0 +1,132 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Aug  1 18:43:41 2024
+
+@author: fvera
+"""
+import numpy as np
+import matplotlib.pyplot as plt
+
+class HodgkinHuxley:
+    def __init__(self):
+        # Membrane parameters
+        self.C_m = 1.0  # µF/cm^2
+        self.V_rest = -65.0  # mV
+        
+        # Current parameters
+        self.g_Na = 120.0  # mS/cm^2
+        self.g_K = 36.0  # mS/cm^2
+        self.g_L = 0.3  # mS/cm^2
+        
+        self.E_Na = 50.0  # mV
+        self.E_K = -77.0  # mV
+        self.E_L = -54.387  # mV
+        
+        # State variables
+        self.V = self.V_rest
+        self.m = self.alpha_m(self.V) / (self.alpha_m(self.V) + self.beta_m(self.V))
+        self.h = self.alpha_h(self.V) / (self.alpha_h(self.V) + self.beta_h(self.V))
+        self.n = self.alpha_n(self.V) / (self.alpha_n(self.V) + self.beta_n(self.V))
+    
+    # Transition rate functions
+    def alpha_m(self, V):
+        V = np.clip(V, -100, 100)  # Clipping V to avoid extreme values
+        return 0.1 * (V + 40) / (1 - np.exp(-(V + 40) / 10))
+
+    def beta_m(self, V):
+        V = np.clip(V, -100, 100)
+        return 4.0 * np.exp(-(V + 65) / 18)
+
+    def alpha_h(self, V):
+        V = np.clip(V, -100, 100)
+        return 0.07 * np.exp(-(V + 65) / 20)
+
+    def beta_h(self, V):
+        V = np.clip(V, -100, 100)
+        return 1.0 / (1 + np.exp(-(V + 35) / 10))
+
+    def alpha_n(self, V):
+        V = np.clip(V, -100, 100)
+        return 0.01 * (V + 55) / (1 - np.exp(-(V + 55) / 10))
+
+    def beta_n(self, V):
+        V = np.clip(V, -100, 100)
+        return 0.125 * np.exp(-(V + 65) / 80)
+
+    # Derivative function to compute the changes
+    def derivatives(self, V, m, h, n, I_ext):
+        I_Na = self.g_Na * (m ** 3) * h * (V - self.E_Na)
+        I_K = self.g_K * (n ** 4) * (V - self.E_K)
+        I_L = self.g_L * (V - self.E_L)
+        dVdt = (I_ext - I_Na - I_K - I_L) / self.C_m
+        dm = self.alpha_m(V) * (1 - m) - self.beta_m(V) * m
+        dh = self.alpha_h(V) * (1 - h) - self.beta_h(V) * h
+        dn = self.alpha_n(V) * (1 - n) - self.beta_n(V) * n
+        return dVdt, dm, dh, dn
+
+    # Update function using RK4 integration
+    def update(self, I_ext, dt):
+        V1, m1, h1, n1 = self.V, self.m, self.h, self.n
+        k1_V, k1_m, k1_h, k1_n = self.derivatives(V1, m1, h1, n1, I_ext)
+
+        V2, m2, h2, n2 = self.V + k1_V * dt / 2, self.m + k1_m * dt / 2, self.h + k1_h * dt / 2, self.n + k1_n * dt / 2
+        k2_V, k2_m, k2_h, k2_n = self.derivatives(V2, m2, h2, n2, I_ext)
+
+        V3, m3, h3, n3 = self.V + k2_V * dt / 2, self.m + k2_m * dt / 2, self.h + k2_h * dt / 2, self.n + k2_n * dt / 2
+        k3_V, k3_m, k3_h, k3_n = self.derivatives(V3, m3, h3, n3, I_ext)
+
+        V4, m4, h4, n4 = self.V + k3_V * dt, self.m + k3_m * dt, self.h + k3_h * dt, self.n + k3_n * dt
+        k4_V, k4_m, k4_h, k4_n = self.derivatives(V4, m4, h4, n4, I_ext)
+
+        # Update state variables
+        self.V += (k1_V + 2 * k2_V + 2 * k3_V + k4_V) * dt / 6
+        self.m += (k1_m + 2 * k2_m + 2 * k3_m + k4_m) * dt / 6
+        self.h += (k1_h + 2 * k2_h + 2 * k3_h + k4_h) * dt / 6
+        self.n += (k1_n + 2 * k2_n + 2 * k3_n + k4_n) * dt / 6
+
+        # Ensure gating variables are within [0, 1]
+        self.m = np.clip(self.m, 0, 1)
+        self.h = np.clip(self.h, 0, 1)
+        self.n = np.clip(self.n, 0, 1)
+
+# Simulate Hodgkin-Huxley model
+def simulate_hh(model, T=2000, dt=0.1, I_ext_amp=10):
+    timesteps = int(T / dt)
+    I_ext = np.zeros(timesteps)
+    I_ext[2000:5000] = I_ext_amp  # External current applied between 200 and 500 ms
+
+    V = np.zeros(timesteps)
+    V[0] = model.V
+
+    for t in range(1, timesteps):
+        model.update(I_ext[t], dt)
+        V[t] = model.V
+
+    return V, I_ext
+
+# Create an instance of the Hodgkin-Huxley model
+hh_model = HodgkinHuxley()
+
+# Run the simulation
+V, I_ext = simulate_hh(hh_model)
+
+# Plot results
+plt.figure(figsize=(10, 6))
+plt.subplot(2, 1, 1)
+plt.plot(np.arange(0, 2000, 0.1), V, label='Membrane Potential (V)')
+plt.xlabel('Time (ms)')
+plt.ylabel('Membrane Potential (mV)')
+plt.title('Hodgkin-Huxley Neuron Model')
+plt.legend()
+plt.grid(True)
+
+plt.subplot(2, 1, 2)
+plt.plot(np.arange(0, 2000, 0.1), I_ext, label='External Current (I_ext)')
+plt.xlabel('Time (ms)')
+plt.ylabel('Current (μA/cm²)')
+plt.legend()
+plt.grid(True)
+
+plt.tight_layout()
+plt.show()
