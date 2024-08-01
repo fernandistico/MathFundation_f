@@ -1,0 +1,153 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Created on Tue Aug 1 2024
+
+@author: fvera
+
+Standard CCF:
+Plotted using compute_ccf.
+Shows the correlation between two spike trains over varying time lags.
+Normalized CCF:
+Plotted using compute_normalized_ccf.
+Adjusted for the mean and variance of the signals to provide a scale-independent comparison.
+Auto-Correlation Function (ACF):
+Plotted using compute_acf.
+Shows how the spike train correlates with itself over varying time lags, useful for identifying periodicities.
+Mutual Information:
+Represented as a horizontal line on the plot since it is a scalar value.
+Indicates the amount of shared information between the two spike trains.
+Partial Cross-Correlation:
+Also represented as a horizontal line.
+Provides the partial correlation value controlling for indirect effects.
+
+"""
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from scipy.signal import correlate
+from sklearn.metrics import mutual_info_score
+from sklearn.covariance import GraphicalLasso
+import matplotlib.pyplot as plt
+
+# Generate synthetic spike train data (binary arrays)
+np.random.seed(0)
+spike_train_1 = np.random.randint(0, 2, 2000)
+spike_train_2 = np.random.randint(0, 2, 2000)
+
+# Compute standard CCF
+def compute_ccf(data1, data2, max_lag=100):
+    ccf = correlate(data1, data2, mode='full', method='auto')
+    lags = np.arange(-max_lag, max_lag + 1)
+    ccf_center = len(ccf) // 2
+    ccf = ccf[ccf_center - max_lag:ccf_center + max_lag + 1]
+    return lags, ccf
+
+# Compute normalized CCF
+def compute_normalized_ccf(data1, data2, max_lag=100):
+    mean1, mean2 = np.mean(data1), np.mean(data2)
+    std1, std2 = np.std(data1), np.std(data2)
+    normalized_data1 = (data1 - mean1) / std1
+    normalized_data2 = (data2 - mean2) / std2
+    ccf = correlate(normalized_data1, normalized_data2, mode='full', method='auto')
+    lags = np.arange(-max_lag, max_lag + 1)
+    ccf_center = len(ccf) // 2
+    ccf = ccf[ccf_center - max_lag:ccf_center + max_lag + 1]
+    return lags, ccf
+
+# Compute ACF
+def compute_acf(data, max_lag=100):
+    acf = correlate(data, data, mode='full', method='auto')
+    lags = np.arange(-max_lag, max_lag + 1)
+    acf_center = len(acf) // 2
+    acf = acf[acf_center - max_lag:acf_center + max_lag + 1]
+    return lags, acf
+
+# Compute mutual information
+def compute_mutual_information(data1, data2):
+    return mutual_info_score(data1, data2)
+
+# Compute partial cross-correlation
+def compute_partial_ccf(data, max_lag=100):
+    X = np.vstack((data[:, 0], data[:, 1])).T
+    model = GraphicalLasso(alpha=0.01)
+    model.fit(X)
+    precision_matrix = model.precision_
+    partial_corr = -precision_matrix[0, 1] / np.sqrt(precision_matrix[0, 0] * precision_matrix[1, 1])
+    return partial_corr
+
+# Compute CCFs
+lags, ccf = compute_ccf(spike_train_1, spike_train_2)
+lags_norm, normalized_ccf = compute_normalized_ccf(spike_train_1, spike_train_2)
+lags_acf, acf = compute_acf(spike_train_1)
+
+# Compute mutual information
+mutual_info = compute_mutual_information(spike_train_1, spike_train_2)
+print(f'Mutual Information: {mutual_info}')
+
+# Compute partial cross-correlation
+data_combined = np.vstack((spike_train_1, spike_train_2)).T
+partial_ccf = compute_partial_ccf(data_combined)
+print(f'Partial Cross-Correlation: {partial_ccf}')
+
+# Reshape CCFs for CNN input
+ccf_reshaped = ccf.reshape(1, 1, -1)  # Assuming 1D input with one channel
+
+# Define CNN architecture
+class CNN(nn.Module):
+    def __init__(self):
+        super(CNN, self).__init__()
+        self.conv1 = nn.Conv1d(in_channels=1, out_channels=16, kernel_size=3, stride=1, padding=1)
+        self.pool = nn.MaxPool1d(kernel_size=2, stride=2, padding=0)
+        self.conv2 = nn.Conv1d(in_channels=16, out_channels=32, kernel_size=3, stride=1, padding=1)
+        self.fc1 = nn.Linear(32 * (len(ccf) // 2 // 2), 50)  # Adjust the size according to your data
+        self.fc2 = nn.Linear(50, 2)  # Example for binary classification
+
+    def forward(self, x):
+        x = self.pool(torch.relu(self.conv1(x)))
+        x = self.pool(torch.relu(self.conv2(x)))
+        x = x.view(-1, 32 * (len(ccf) // 2 // 2))
+        x = torch.relu(self.fc1(x))
+        x = self.fc2(x)
+        return x
+
+# Prepare data for training
+ccf_tensor = torch.tensor(ccf_reshaped, dtype=torch.float32)
+labels = torch.tensor([1], dtype=torch.long)  # Example label
+
+# Instantiate and train the CNN
+model = CNN()
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+
+# Training loop
+for epoch in range(2000):
+    optimizer.zero_grad()
+    outputs = model(ccf_tensor)
+    loss = criterion(outputs, labels)
+    loss.backward()
+    optimizer.step()
+
+# Validate the model (using same data for simplicity)
+with torch.no_grad():
+    outputs = model(ccf_tensor)
+    _, predicted = torch.max(outputs, 1)
+    accuracy = (predicted == labels).sum().item() / len(labels)
+
+print(f'Validation Accuracy: {accuracy}')
+
+# Plot CCF for visualization
+plt.figure(figsize=(10, 6))
+plt.plot(lags, ccf, label='Standard CCF')
+plt.plot(lags_norm, normalized_ccf, label='Normalized CCF')
+plt.plot(lags_acf, acf, label='Auto-Correlation (ACF)')
+plt.title('Cross-Correlation and Auto-Correlation Functions')
+plt.xlabel('Lag')
+plt.ylabel('Correlation')
+plt.legend()
+plt.grid(True)
+plt.show()
+
+plt.tight_layout()
+plt.show()
